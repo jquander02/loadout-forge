@@ -85,6 +85,16 @@ export async function registerDimApp(bungieApiKey, appId) {
     body: JSON.stringify({ id: appId, bungieApiKey, origin: ORIGIN })
   });
   const body = await res.json().catch(() => ({}));
-  if (!res.ok || !body.dimApiKey) throw new Error(body.message || body.error || `DIM's API returned ${res.status}.`);
-  return body.dimApiKey;
+  if (!res.ok) throw new Error(body.message || body.error || `DIM's API returned ${res.status}.`);
+  const key = findDimKey(body);
+  if (!key) throw new Error(`DIM answered but sent no key (reply had: ${Object.keys(body).join(", ") || "nothing"}). You can paste a key under "Paste a key instead".`);
+  return key;
+}
+
+/** DIM wraps the key as { app: { dimApiKey } }; accept it at any depth in case that changes. */
+export function findDimKey(obj, depth = 0) {
+  if (!obj || typeof obj !== "object" || depth > 4) return null;
+  if (typeof obj.dimApiKey === "string" && obj.dimApiKey) return obj.dimApiKey;
+  for (const v of Object.values(obj)) { const k = findDimKey(v, depth + 1); if (k) return k; }
+  return null;
 }

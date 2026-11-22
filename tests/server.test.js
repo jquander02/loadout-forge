@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawn } from "node:child_process";
 import { slimManifest } from "../server/manifest.js";
-import { parseLoadoutInput, findDimLinkInHtml } from "../server/dim.js";
+import { parseLoadoutInput, findDimLinkInHtml, findDimKey } from "../server/dim.js";
 import { planLoadout, targetsFrom, weightsFrom, statIndex } from "../server/plan.js";
 import { RAW_TABLES, SHARED_LOADOUT } from "./fixtures.js";
 
@@ -47,6 +47,12 @@ test("findDimLinkInHtml pulls the DIM link out of a light.gg export page", () =>
   const link = findDimLinkInHtml(html);
   assert.equal(parseLoadoutInput(link).loadout.equipped.length, 0);
   assert.equal(findDimLinkInHtml("<html>nothing</html>"), null);
+});
+
+test("findDimKey reads DIM's wrapped and bare replies", () => {
+  assert.equal(findDimKey({ app: { id: "x-dev", dimApiKey: "k123" } }), "k123");
+  assert.equal(findDimKey({ dimApiKey: "k456" }), "k456");
+  assert.equal(findDimKey({ app: {} }), null);
 });
 
 test("stat helpers read Armor 3.0 and legacy constraints", () => {
