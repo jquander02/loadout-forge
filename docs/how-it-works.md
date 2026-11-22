@@ -44,6 +44,28 @@ Each stat mod adds +10 to one stat. Because `value` is concave (its gain per poi
 3. If the search would still be over 2.5 million combinations, trim the lowest-scoring pieces from the largest slot. The top 3 exotics and top 5 set pieces in each slot are always kept.
 4. Check every remaining combination in a Web Worker, skipping branches that can no longer meet the exotic or set requirement. Keep the top 8.
 
-## 4. Storage (`js/storage.js`)
+## 4. Storage (`server/config.js`, `js/storage.js`)
 
-Imported gear and loadouts are saved in your browser's `localStorage`. **Download backup** writes everything to a JSON file. **Restore** merges its loadouts into what's there and fills in gear if you only have the sample data loaded.
+The browser page saves through the local server's `/api/store/<armor|weapons|loadouts>` endpoints. The server writes them to `data/*.json`, using a temp file and rename so a crash can't leave a half-written file. **Download backup** writes everything to one JSON file. **Restore** merges its loadouts into what's there and fills in gear if only sample data is loaded.
+
+## 5. Checking a shared loadout (`server/dim.js`, `server/plan.js`)
+
+### Reading the input
+
+| Input | How it's read |
+| --- | --- |
+| `dim.gg/<code>/…` | `GET https://api.destinyitemmanager.com/loadout_share?shareId=<code>` with your DIM API key |
+| DIM URL with `?loadout=` | The loadout JSON is in the link itself |
+| `light.gg/loadouts/<id>` | Fetch the `/export` page and read its "Continue to DIM" link |
+| `{ … }` | DIM loadout JSON, bare or wrapped as `{ "loadout": … }` |
+
+### Matching
+
+Each item hash is looked up in the cut-down manifest:
+
+- **Subclass** (item type 16): its socket overrides are named and grouped as Aspect, Fragment, Super, Grenade, Melee, Class ability or Jump, by plug category.
+- **Weapons** (type 3): *have* if any of your weapons has the same hash or name. Your copies are ranked by how many of the loadout's chosen perks they carry. Otherwise *stand-in* if you own a weapon of the same type, ranked by same element, then gear tier, then rarity. Otherwise *missing*.
+- **Armor** (type 2): *have* by hash or name for the same class. A missing exotic is *missing*. Missing legendary armor counts as a *stand-in*, because the armor search fills that slot.
+- **Stat minimums** come from DIM's `statConstraints` (`minStat`, or `minTier × 10` from older loadouts). If none are set, the builder's weights come from which stats the loadout's mods name.
+- **Set bonuses**: any set with 2+ pieces in the loadout. The armor search requires it (2- or 4-piece) when you own pieces of that set.
+- **How to get it**: the collectible's `sourceString`, plus a reminder to check Collections when the item has a collectible.

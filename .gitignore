@@ -6,3 +6,6 @@ Thumbs.db
 # Your own DIM exports stay off GitHub
 destiny*.csv
 *-backup-*.json
+
+# Local app data: your gear, loadouts, API keys and the item database
+data/

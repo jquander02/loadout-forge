@@ -73,10 +73,12 @@ function metaWeapons(m, file) {
 }
 function setArmor(items, meta) { state.armor = items; state.armorMeta = meta; computeVerdicts(state.armor); computeRanks(state.armor, focusWeights()); }
 function setWeapons(items, meta) { state.weapons = items; state.weaponMeta = meta; computeWeaponDups(state.weapons); }
-function persistGear() {
+async function persistGear() {
   renderAll();
-  const ok = storage.save("armor", { items: state.armor, meta: state.armorMeta }) & storage.save("weapons", { items: state.weapons, meta: state.weaponMeta });
-  if (!ok) toast("This browser wouldn't save your gear, so you'll need to re-import next visit.");
+  try {
+    await storage.save("armor", { items: state.armor, meta: state.armorMeta });
+    await storage.save("weapons", { items: state.weapons, meta: state.weaponMeta });
+  } catch (e) { toast("Couldn't save your gear: " + e.message); }
 }
 function loadSample(persist = true) {
   const { armorCSV, weaponCSV } = sampleCSVs();
@@ -262,21 +264,25 @@ function renderResults() {
   const r = state.results; if (!r) return;
   if (!r.builds.length) { $("#results").innerHTML = `<div class="empty"><b>No build fits those rules.</b><span>Try a lower set requirement, a different exotic, or include the vault.</span></div>`; return; }
   const legend = `<div class="legend"><span><i style="background:var(--accent)"></i>From armor${r.mw ? " (incl. masterwork)" : ""}</span><span><i style="background:var(--exotic)"></i>From stat mods</span><span><i style="background:var(--text);width:2px"></i>Your minimum</span><span>Bar midpoint = 100</span></div>`;
-  $("#results").innerHTML = legend + r.builds.map((b, i) => `<article class="build ${i === 0 ? "top1" : ""}">
-    <div class="bhead"><span class="rk">#${i + 1}</span>
+  $("#results").innerHTML = legend + r.builds.map((b, i) => buildCard(b, i, r.t, "save")).join("");
+}
+const buildLegend = mw => `<div class="legend"><span><i style="background:var(--accent)"></i>From armor${mw ? " (incl. masterwork)" : ""}</span><span><i style="background:var(--exotic)"></i>From stat mods</span><span><i style="background:var(--text);width:2px"></i>Minimum</span><span>Bar midpoint = 100</span></div>`;
+function buildCard(b, i, T, saveAttr, label = "#" + (i + 1)) {
+  return `<article class="build ${i === 0 ? "top1" : ""}">
+    <div class="bhead"><span class="rk">${label}</span>
       <span><b class="mono">${b.tot}</b> <span class="muted small">total stats</span></span>
       ${b.def ? `<span class="status-bad small">${b.def} short of your minimums</span>` : `<span class="status-ok small">Meets every minimum</span>`}
       ${b.waste ? `<span class="small" style="color:var(--warn)">${b.waste} over the 200 cap</span>` : ""}
       <span class="small muted">Mods: ${esc(modText(b.mods))}</span>
       ${setCounts(b.items).length ? `<span class="small">Sets: ${esc(setCounts(b.items).join(", "))}</span>` : ""}
-      <span style="margin-left:auto"><button class="btn" data-save="${i}">Save loadout</button></span>
+      <span style="margin-left:auto"><button class="btn" data-${saveAttr}="${i}">Save loadout</button></span>
     </div>
     <div class="bbody">
       <div class="pieces">${b.items.map(it => `<div class="piece"><span class="slot">${esc(it.slot)}</span><span><span class="iname ${rarClass(it.rarity)}">${esc(it.name)}</span> ${tierChip(it)}<div class="sub">${[it.archetype, it.set, it.owner].filter(Boolean).map(esc).join(" · ")} · <span class="mono">${it.stats.map((v, k) => (v ? STATS[k].slice(0, 3) + " " + v : "")).filter(Boolean).join(" / ")}</span></div></span></div>`).join("")}</div>
-      <div class="finals">${finalBars(b.base, b.final, r.t)}</div>
+      <div class="finals">${finalBars(b.base, b.final, T)}</div>
     </div>
-    <div class="savebox" id="sb${i}" hidden></div>
-  </article>`).join("");
+    <div class="savebox" id="${saveAttr === "save" ? "sb" : "psb"}${i}" hidden></div>
+  </article>`;
 }
 const topStats = w => w.map((v, k) => [v, k]).filter(x => x[0] >= 2).sort((a, b) => b[0] - a[0]).slice(0, 2).map(x => STATS[x[1]]).join("/") || "Balanced";
 function openSave(i) {
@@ -311,7 +317,7 @@ function doSave(i) {
 
 /* ---------- Loadouts ---------- */
 function saveLoadouts() {
-  if (!storage.save("loadouts", state.loadouts)) toast("This browser wouldn't save. Download a backup so you don't lose it.");
+  storage.save("loadouts", state.loadouts).catch(e => toast("Couldn't save loadouts: " + e.message));
   $("#cLoadouts").textContent = state.loadouts.length || "";
   renderLoadouts();
 }
@@ -339,11 +345,180 @@ function renderLoadouts() {
   }).join("") + `</div><p class="small muted" style="margin-top:12px">Paste the DIM search into DIM's search bar to highlight every piece, then use Loadouts → Create to save it as a DIM loadout.</p>`;
 }
 
+/* ---------- Loadout link ---------- */
+const STATUS_LABEL = { have: "You have it", substitute: "Use a stand-in", missing: "Missing" };
+const STATUS_PILL = { have: "keep", substitute: "dup", missing: "junk" };
+const statusPill = s => `<span class="pill ${STATUS_PILL[s]}">${STATUS_LABEL[s]}</span>`;
+const howList = tips => (tips && tips.length ? `<ul class="how">${tips.map(t => `<li>${esc(t)}</li>`).join("")}</ul>` : "");
+
+async function analyzeLink() {
+  const input = $("#linkInput").value.trim();
+  if (!input) { toast("Paste a loadout link first."); return; }
+  $("#btnAnalyze").disabled = true;
+  $("#linkMsg").innerHTML = `<span class="spinner"></span> Reading the loadout…`;
+  try {
+    const { plan, source, inventory } = await storage.api("/api/plan", { method: "POST", body: { input } });
+    state.plan = { plan, source, inventory, build: null };
+    $("#linkMsg").textContent = `Read from ${source}.`;
+    renderPlan();
+    await runPlanBuild();
+  } catch (e) {
+    $("#linkMsg").innerHTML = `<span class="status-bad">${esc(e.message)}</span>`;
+  } finally { $("#btnAnalyze").disabled = false; }
+}
+
+async function runPlanBuild() {
+  const p = state.plan?.plan; if (!p) return;
+  const box = $("#planBuild"); if (!box) return;
+  const cls = p.search.cls || state.armorClass || "Hunter";
+  if (!state.armor.some(a => a.cls === cls)) { box.innerHTML = `<div class="empty"><b>No ${esc(cls)} armor imported.</b><span>Import your DIM armor export to see which of your pieces fit this build.</span></div>`; return; }
+  const opts = { cls, exotic: p.search.exotic, K: 5, mw: state.armorMeta?.statsAreBase !== false, setName: p.search.setName, setN: p.search.setN, includeVault: true, w: p.search.w, t: p.search.t };
+  let prep = prepareSearch(state.armor, opts);
+  if (prep.error && opts.setName) prep = prepareSearch(state.armor, { ...opts, setName: "" });
+  if (prep.error) { box.innerHTML = `<div class="empty"><b>Couldn't build armor for this.</b><span>${esc(prep.error)}</span></div>`; return; }
+  box.innerHTML = `<p class="small muted"><span class="spinner"></span> Finding your best armor for this build…</p>`;
+  const res = await optimize({ ...prep.payload, top: 3 });
+  const builds = hydrate(res.best, prep.pruned);
+  state.plan.build = { builds, opts };
+  if (!builds.length) { box.innerHTML = `<div class="empty"><b>No armor combination fits.</b><span>Try the Builder tab with fewer requirements.</span></div>`; return; }
+  const notes = [];
+  if (p.search.exoticMissing) notes.push(`You don't have ${p.search.exoticMissing}, so this uses the best exotic you do have. Swap it in once you get it.`);
+  if (p.sets.length && !opts.setName) notes.push(`You don't own pieces of ${p.sets.map(x => x.name).join(" or ")}, so the set bonus isn't included.`);
+  if (!p.targets.some(Boolean)) notes.push("The loadout doesn't set stat minimums, so stats are weighted from its mods.");
+  box.innerHTML = (notes.length ? `<div class="banner small">${notes.map(esc).join("<br>")}</div>` : "") + buildLegend(opts.mw) +
+    builds.map((b, i) => buildCard(b, i, p.targets, "plansave", i === 0 ? "Best" : "Alt " + i)).join("");
+}
+
+function renderPlan() {
+  const { plan: p, inventory } = state.plan;
+  const s = p.summary, total = s.have + s.substitute + s.missing;
+  const ready = s.missing === 0 ? (s.substitute === 0 ? "You can run this exactly as shared." : "You can run this today with stand-ins.") : `You're missing ${s.missing} item${s.missing === 1 ? "" : "s"}.`;
+  const weaponRow = w => {
+    let mine = "";
+    if (w.status === "have") {
+      const best = w.have[0];
+      mine = `<b>${esc(best.name)}</b> <span class="sub">${esc(best.owner || "")}${w.have.length > 1 ? ` · ${w.have.length} copies` : ""}</span>` +
+        (w.wantPerks.length ? `<div class="sub">${best.perksMatched.length} of ${w.wantPerks.length} listed perks on your best copy${best.perksMatched.length ? ": " + esc(best.perksMatched.join(", ")) : ""}</div>` : "");
+    } else if (w.status === "substitute") {
+      mine = w.alternatives.map((a, i) => `<div>${i === 0 ? "<b>" : ""}${esc(a.name)}${i === 0 ? "</b>" : ""} <span class="sub">${esc([a.element, a.tier ? "T" + a.tier : "", a.owner].filter(Boolean).join(" · "))}</span></div>`).join("");
+    } else mine = `<span class="muted">Nothing similar in your weapons.</span>`;
+    return `<tr><td class="name"><span class="rar ${rarClass(w.rarity)}"></span><span style="display:inline-grid;vertical-align:middle"><span class="iname ${rarClass(w.rarity)}">${esc(w.name)}</span><span class="sub">${esc([w.slot, w.type, w.element].filter(Boolean).join(" · "))}</span>${w.wantPerks.length ? `<span class="sub">Perks: ${esc(w.wantPerks.join(", "))}</span>` : ""}</span></td>
+      <td>${statusPill(w.status)}</td><td style="white-space:normal;min-width:220px">${mine}</td><td style="white-space:normal;min-width:220px">${howList(w.howToGet)}</td></tr>`;
+  };
+  const armorRow = a => {
+    let mine;
+    if (a.status === "have") mine = `<b>${esc(a.have[0].name)}</b> <span class="sub">${esc(a.have[0].owner || "")}${a.have.length > 1 ? ` · ${a.have.length} copies` : ""}</span>`;
+    else if (a.exotic) mine = `<span class="muted">The armor below uses your best other exotic.</span>`;
+    else mine = `<span class="muted">Any ${esc(a.slot.toLowerCase())} works; the armor below picks yours.</span>` + (a.set ? `<div class="sub">${a.sameSetOwned ? `You own ${a.sameSetOwned} ${esc(a.set)} ${esc(a.slot.toLowerCase())}${a.sameSetOwned > 1 ? "s" : ""}.` : `You have no ${esc(a.set)} piece for this slot.`}</div>` : "");
+    return `<tr><td>${esc(a.slot)}</td><td class="name"><span class="rar ${rarClass(a.rarity)}"></span><span style="display:inline-grid;vertical-align:middle"><span class="iname ${rarClass(a.rarity)}">${esc(a.name)}</span>${a.set ? `<span class="sub">Set: ${esc(a.set)}</span>` : ""}</span></td>
+      <td>${statusPill(a.status)}</td><td style="white-space:normal;min-width:200px">${mine}</td><td style="white-space:normal;min-width:220px">${a.exotic || a.status === "have" ? howList(a.howToGet) : ""}</td></tr>`;
+  };
+  const missing = [...p.armor.filter(a => a.status === "missing" || (a.exotic && a.status !== "have")), ...p.weapons.filter(w => w.status !== "have")];
+  const parts = p.subclass ? Object.entries(p.subclass.parts.reduce((g, x) => ((g[x.kind] ||= []).push(x), g), {})) : [];
+  $("#planOut").innerHTML = `
+  <div class="panel">
+    <div class="row" style="justify-content:space-between">
+      <div><h2>${esc(p.name)}</h2><span class="small muted">${esc(p.cls)}${p.subclass ? " · " + esc(p.subclass.name) : ""} · from ${esc(state.plan.source)}</span></div>
+      <span class="${s.missing ? "status-bad" : "status-ok"}"><b>${ready}</b></span>
+    </div>
+    ${inventory.sample ? `<div class="banner small">These results use <b>sample gear</b>. Import your DIM exports to check against your own.</div>` : ""}
+    ${p.notes ? `<p class="small" style="white-space:pre-wrap">${esc(p.notes)}</p>` : ""}
+    <div class="tiles">${tile(s.have, "items you have", "good")}${tile(s.substitute, "with stand-ins from your gear", "warn")}${tile(s.missing, "missing", "bad")}${tile(total ? Math.round((s.have / total) * 100) + "%" : "—", "exact match")}</div>
+  </div>
+  <h3>Weapons</h3>
+  <div class="tablewrap"><table><thead><tr><th class="nosort">Loadout weapon</th><th class="nosort">Status</th><th class="nosort">Your best option</th><th class="nosort">How to get it</th></tr></thead><tbody>${p.weapons.map(weaponRow).join("") || `<tr><td colspan="4" class="muted">No weapons in this loadout.</td></tr>`}</tbody></table></div>
+  <h3>Armor</h3>
+  <div class="tablewrap"><table><thead><tr><th class="nosort">Slot</th><th class="nosort">Loadout piece</th><th class="nosort">Status</th><th class="nosort">Your option</th><th class="nosort">How to get it</th></tr></thead><tbody>${p.armor.map(armorRow).join("") || `<tr><td colspan="5" class="muted">No armor in this loadout.</td></tr>`}</tbody></table></div>
+  <div class="panel">
+    <h3>Your best armor for this build</h3>
+    <p class="small muted">${p.targets.some(Boolean) ? "Aiming for the loadout's stat minimums: " + esc(STATS.map((n, k) => (p.targets[k] ? `${n} ${p.targets[k]}` : "")).filter(Boolean).join(", ")) + "." : "Weighted toward the stats this loadout's mods support."}${p.sets.length ? " Set bonus in the loadout: " + esc(p.sets.map(x => `${x.name} (${x.pieces}-piece)`).join(", ")) + "." : ""}</p>
+    <div id="planBuild" class="results"></div>
+  </div>
+  <div class="grid2">
+    <div class="panel"><h3>Subclass</h3>${p.subclass ? `<p><b>${esc(p.subclass.name)}</b></p>${parts.map(([k, xs]) => `<div class="kv"><span class="k">${esc(k)}</span><span>${xs.map(x => `<span title="${esc(x.description)}">${esc(x.name)}</span>`).join(", ")}</span></div>`).join("")}<p class="small muted">Set these in game. Whether you've unlocked each aspect and fragment isn't in DIM's export, so it isn't checked here.</p>` : `<p class="muted small">No subclass in this loadout.</p>`}</div>
+    <div class="panel"><h3>Armor mods</h3>${p.mods.length ? `<div class="kv">${p.mods.map(x => `<span class="k mono">${x.count}×</span><span>${esc(x.name)}</span>`).join("")}</div>` : `<p class="muted small">No mods listed.</p>`}</div>
+  </div>
+  ${missing.length ? `<div class="panel"><h3>Shopping list</h3>${missing.map(x => `<div><b class="iname ${rarClass(x.rarity)}">${esc(x.name)}</b>${x.status === "substitute" ? ` <span class="sub">(stand-in available)</span>` : ""}${howList(x.howToGet)}</div>`).join("")}</div>` : ""}
+  ${p.unknown.length ? `<p class="small muted">${p.unknown.length === 1 ? "1 item wasn't" : p.unknown.length + " items weren't"} in your item database. Update it in Settings if a game patch just landed.</p>` : ""}`;
+}
+
+function openPlanSave(i) {
+  const box = $("#psb" + i); if (!box.hidden) { box.hidden = true; return; }
+  const p = state.plan.plan;
+  box.innerHTML = `<div class="row"><label class="field" style="flex:1;min-width:200px">Loadout name<input type="text" id="pln${i}" value="${esc(p.name)}"></label></div>
+    <p class="small muted">Saves this armor, your best copy of each loadout weapon (or the top stand-in), and the subclass and mods as notes.</p>
+    <div class="row"><button class="btn primary" data-doplansave="${i}">Save</button></div>`;
+  box.hidden = false;
+}
+function doPlanSave(i) {
+  const { plan: p, build } = state.plan, b = build.builds[i];
+  const pickWeapon = w => {
+    const id = w.status === "have" ? w.have[0].id : w.alternatives[0]?.id;
+    const x = id && state.weapons.find(y => y.id === id);
+    return x ? { id: x.id, name: x.name, type: x.type, element: x.element, rarity: x.rarity, perks: x.perks.filter(q => q.on).map(q => q.n) } : null;
+  };
+  const notes = [p.subclass ? `${p.subclass.name}: ${p.subclass.parts.map(x => x.name).join(", ")}` : "", p.mods.length ? "Mods: " + p.mods.map(x => `${x.count}× ${x.name}`).join(", ") : "", `From ${state.plan.source}`].filter(Boolean).join("\n");
+  const lo = {
+    id: "lo" + Date.now().toString(36), name: $("#pln" + i).value.trim() || p.name, cls: build.opts.cls, created: Date.now(),
+    armor: b.items.map(it => ({ id: it.id, name: it.name, slot: it.slot, rarity: it.rarity, tier: it.tier, set: it.set, owner: it.owner, stats: it.stats })),
+    weapons: p.weapons.map(pickWeapon).filter(Boolean),
+    mods: b.mods, final: b.final, base: b.base, targets: p.targets, priorities: p.weights, notes
+  };
+  state.loadouts.unshift(lo);
+  saveLoadouts();
+  $("#psb" + i).innerHTML = `<div class="row"><span class="status-ok">Saved “${esc(lo.name)}”.</span><a class="btn" href="#loadouts">View loadouts</a></div>`;
+}
+
+/* ---------- Settings ---------- */
+let pollTimer = null;
+async function refreshStatus() {
+  let st;
+  try { st = await storage.api("/api/status"); } catch (e) { $("#setupBanner").innerHTML = `<div class="banner">${esc(e.message)}</div>`; return; }
+  state.status = st;
+  const s = st.settings, m = st.manifest;
+  $$(".originText").forEach(el => (el.textContent = s.origin));
+  $("#dataDir").textContent = st.dataDir;
+  $("#bungieState").innerHTML = s.hasBungieKey ? `<span class="status-ok">Saved (${esc(s.bungieApiKey)})</span>` : `<span class="muted">Not set yet.</span>`;
+  $("#dimState").innerHTML = s.hasDimKey ? `<span class="status-ok">Saved (${esc(s.dimApiKey)})</span>` : `<span class="muted">Not set yet.</span>`;
+  $("#btnDimKey").disabled = !s.hasBungieKey;
+  $("#btnManifest").disabled = !s.hasBungieKey || m.job.running;
+  $("#btnManifest").textContent = m.ready ? "Update item database" : "Download item database";
+  $("#manifestState").innerHTML = m.job.running ? `<span class="spinner"></span> ${esc(m.job.step)}…`
+    : m.job.error ? `<span class="status-bad">${esc(m.job.error)}</span>`
+    : m.ready ? `<span class="status-ok">Ready · ${m.items.toLocaleString()} items · version ${esc(m.version)} · ${new Date(m.builtAt).toLocaleDateString()}</span>` : `<span class="muted">Not downloaded yet.</span>`;
+  const todo = [!s.hasBungieKey && "add your Bungie API key", s.hasBungieKey && !m.ready && "download the item database"].filter(Boolean);
+  $("#setupBanner").innerHTML = todo.length && location.hash !== "#settings" ? `<div class="banner" style="margin-bottom:16px">To check shared loadouts, ${todo.join(" and ")} in <a href="#settings">Settings</a>.</div>` : "";
+  clearTimeout(pollTimer);
+  if (m.job.running) pollTimer = setTimeout(refreshStatus, 1500);
+}
+function wireLinkAndSettings() {
+  $("#btnAnalyze").onclick = analyzeLink;
+  $("#linkInput").addEventListener("keydown", e => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) analyzeLink(); });
+  $("#planOut").addEventListener("click", e => {
+    const s = e.target.closest("[data-plansave]"); if (s) return openPlanSave(+s.dataset.plansave);
+    const d = e.target.closest("[data-doplansave]"); if (d) return doPlanSave(+d.dataset.doplansave);
+  });
+  const guard = fn => async () => { try { await fn(); } catch (e) { toast(e.message); } await refreshStatus(); };
+  $("#btnSaveBungie").onclick = guard(async () => {
+    const v = $("#bungieKey").value.trim(); if (!v) { toast("Paste your Bungie API key first."); return; }
+    await storage.api("/api/settings", { method: "POST", body: { bungieApiKey: v } });
+    $("#bungieKey").value = ""; toast("Bungie key saved.");
+  });
+  $("#btnSaveDim").onclick = guard(async () => {
+    const v = $("#dimKey").value.trim(); if (!v) { toast("Paste a DIM API key first."); return; }
+    await storage.api("/api/settings", { method: "POST", body: { dimApiKey: v } });
+    $("#dimKey").value = ""; toast("DIM key saved.");
+  });
+  $("#btnDimKey").onclick = guard(async () => { $("#dimState").innerHTML = `<span class="spinner"></span> Asking DIM…`; await storage.api("/api/dim/register", { method: "POST", body: {} }); toast("DIM key saved."); });
+  $("#btnManifest").onclick = guard(async () => { await storage.api("/api/manifest/update", { method: "POST", body: {} }); });
+  window.addEventListener("hashchange", () => { if (state.status) refreshStatus(); });
+}
+
 /* ---------- Routing & events ---------- */
-const TABS = ["import", "armor", "weapons", "builder", "loadouts"];
+const TABS = ["link", "import", "armor", "weapons", "builder", "loadouts", "settings"];
 function route() {
   let tab = location.hash.replace("#", "");
-  if (!TABS.includes(tab)) tab = state.armorMeta && !state.armorMeta.sample ? "armor" : "import";
+  if (!TABS.includes(tab)) tab = "link";
   TABS.forEach(t => $("#v-" + t).classList.toggle("active", t === tab));
   $$("nav.tabs a").forEach(a => a.setAttribute("aria-current", a.dataset.tab === tab ? "page" : "false"));
 }
@@ -442,14 +617,22 @@ function wire() {
 }
 
 /* ---------- Boot ---------- */
-wire();
-const savedArmor = storage.load("armor"), savedWeapons = storage.load("weapons"), savedLoadouts = storage.load("loadouts");
-if (Array.isArray(savedLoadouts)) state.loadouts = savedLoadouts;
-if (savedArmor?.items?.length || savedWeapons?.items?.length) {
-  if (savedArmor?.items?.length) setArmor(savedArmor.items, savedArmor.meta);
-  if (savedWeapons?.items?.length) setWeapons(savedWeapons.items, savedWeapons.meta);
-  renderAll();
-} else {
-  loadSample(false); // open in a working state with clearly marked example gear
+async function boot() {
+  wire();
+  wireLinkAndSettings();
+  try {
+    const [savedArmor, savedWeapons, savedLoadouts] = await Promise.all([storage.load("armor"), storage.load("weapons"), storage.load("loadouts")]);
+    if (Array.isArray(savedLoadouts)) state.loadouts = savedLoadouts;
+    if (savedArmor?.items?.length || savedWeapons?.items?.length) {
+      if (savedArmor?.items?.length) setArmor(savedArmor.items, savedArmor.meta);
+      if (savedWeapons?.items?.length) setWeapons(savedWeapons.items, savedWeapons.meta);
+      renderAll();
+    } else loadSample(false); // open in a working state with clearly marked example gear
+  } catch (e) {
+    loadSample(false);
+    toast(e.message);
+  }
+  route();
+  await refreshStatus();
 }
-route();
+boot();

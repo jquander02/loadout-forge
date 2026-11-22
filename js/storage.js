@@ -1,17 +1,21 @@
-// Browser storage with graceful failure (private mode, full quota, blocked storage).
-const PREFIX = "lf_";
+// Talks to the local Loadout Forge server, which keeps everything in the data/ folder on this PC.
 export const BACKUP_VERSION = 1;
 
-export function load(key) {
-  try { const v = localStorage.getItem(PREFIX + key); return v ? JSON.parse(v) : null; }
-  catch (e) { return null; }
+/** JSON request to the local server. Throws Error(message) on failure. */
+export async function api(path, { method = "GET", body } = {}) {
+  let res;
+  try {
+    res = await fetch(path, { method, headers: body !== undefined ? { "Content-Type": "application/json" } : {}, body: body !== undefined ? JSON.stringify(body) : undefined });
+  } catch (e) {
+    throw new Error("Can't reach the Loadout Forge server. Is its window still open?");
+  }
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok && res.status !== 202) throw new Error(data.error || `The server returned ${res.status}.`);
+  return data;
 }
 
-/** Returns false when the browser refused to store the value. */
-export function save(key, value) {
-  try { localStorage.setItem(PREFIX + key, JSON.stringify(value)); return true; }
-  catch (e) { return false; }
-}
+export async function load(key) { return (await api(`/api/store/${key}`)).value; }
+export async function save(key, value) { await api(`/api/store/${key}`, { method: "PUT", body: { value } }); }
 
 export function makeBackup(state) {
   return {
@@ -29,7 +33,7 @@ export function readBackup(obj) {
   return obj;
 }
 
-/** Offers a file to the viewer through a temporary link. */
+/** Offers a file to download through a temporary link. */
 export function downloadFile(filename, text, type = "text/plain") {
   const url = URL.createObjectURL(new Blob([text], { type }));
   const a = Object.assign(document.createElement("a"), { href: url, download: filename });
