@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="description" content="Evaluate your Destiny 2 armor and weapons from DIM exports and build optimized Armor 3.0 loadouts.">
+<title>Loadout Forge</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Rajdhani:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect x='8' y='8' width='16' height='16' transform='rotate(45 16 16)' fill='none' stroke='%23d6b23c' stroke-width='4'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="css/styles.css">
+<script type="module" src="js/app.js"></script>
+</head>
+<body>
+<header class="top">
+  <div class="topin">
+    <div class="brand"><span class="glyph" aria-hidden="true"></span><h1>Loadout Forge</h1><span class="save-state" id="saveState">Saved in this browser</span></div>
+    <nav class="tabs" aria-label="Sections">
+      <a href="#import" data-tab="import">Import</a>
+      <a href="#armor" data-tab="armor">Armor<span class="count" id="cArmor"></span></a>
+      <a href="#weapons" data-tab="weapons">Weapons<span class="count" id="cWeapons"></span></a>
+      <a href="#builder" data-tab="builder">Builder</a>
+      <a href="#loadouts" data-tab="loadouts">Loadouts<span class="count" id="cLoadouts"></span></a>
+    </nav>
+  </div>
+</header>
+
+<main>
+<!-- IMPORT -->
+<section class="view" id="v-import">
+  <div class="grid2">
+    <div class="panel">
+      <h2>Bring in your gear</h2>
+      <p class="muted">Export two spreadsheets from Destiny Item Manager and drop them here. Files are read in your browser and never uploaded.</p>
+      <ol class="steps">
+        <li>Open <a href="https://app.destinyitemmanager.com" target="_blank" rel="noopener">DIM</a> and sign in.</li>
+        <li>Go to <b>Settings</b> (gear icon) → <b>Spreadsheets</b>, or the Organizer's export button.</li>
+        <li>Download <b>Armor</b> and <b>Weapons</b> CSVs.</li>
+        <li>Drop both files below. Re-import any time your vault changes.</li>
+      </ol>
+      <div class="drop" id="drop" tabindex="0" role="button" aria-label="Choose DIM CSV files">
+        <strong>Drop DIM CSVs here</strong>
+        <span class="muted small">or click to choose files · destinyArmor.csv / destinyWeapons.csv</span>
+        <input type="file" id="file" accept=".csv,text/csv" multiple hidden>
+      </div>
+      <div id="importMsg" class="small"></div>
+      <div class="row">
+        <button class="btn" id="btnSample">Load sample gear</button>
+        <button class="btn ghost danger" id="btnClear">Clear imported gear</button>
+      </div>
+    </div>
+    <div class="panel">
+      <h3>What's loaded</h3>
+      <div id="loadedSummary" class="small"></div>
+      <h3>Columns found</h3>
+      <div id="colReport" class="small muted"></div>
+      <h3>Sending results back to DIM</h3>
+      <p class="small muted">The Armor tab builds a tags file (Id, Hash, Tag, Notes) for DIM's <b>Import tags/notes from CSV</b> button in Settings. Saved loadouts copy a DIM search string, so you can select the pieces in DIM and save them as a DIM loadout.</p>
+    </div>
+  </div>
+</section>
+
+<!-- ARMOR -->
+<section class="view" id="v-armor">
+  <div class="row" style="justify-content: space-between;">
+    <h2>Armor review</h2>
+    <div class="row">
+      <button class="btn" id="btnTags">Build DIM tags file</button>
+    </div>
+  </div>
+  <div class="tiles" id="armorTiles"></div>
+  <div class="panel">
+    <div class="row">
+      <div class="pills" id="armorClass" role="group" aria-label="Class"></div>
+      <select id="armorSlot" aria-label="Slot"><option value="">All slots</option></select>
+      <select id="armorVerdict" aria-label="Verdict">
+        <option value="">All verdicts</option><option value="keep">Keep</option><option value="junk">Outclassed</option><option value="legacy">Legacy stats</option>
+      </select>
+      <select id="armorRarity" aria-label="Rarity"><option value="">Legendary + Exotic</option><option value="Exotic">Exotic</option><option value="Legendary">Legendary</option></select>
+      <label class="field" style="grid-auto-flow: column; align-items: center; gap: 6px;">Rank for
+        <select id="armorFocus"></select>
+      </label>
+      <input type="text" id="armorSearch" placeholder="Search name, set, owner" aria-label="Search armor" style="min-width: 200px;">
+    </div>
+    <p class="small muted">Outclassed means another piece of the same slot, class, set and exotic has every stat equal or higher and is at least the same gear tier. Keep everything else until you've run a few builds.</p>
+  </div>
+  <div id="tagsOut"></div>
+  <div class="tablewrap"><table id="armorTable"></table></div>
+</section>
+
+<!-- WEAPONS -->
+<section class="view" id="v-weapons">
+  <h2>Weapons</h2>
+  <div class="tiles" id="weaponTiles"></div>
+  <div class="panel">
+    <div class="row">
+      <select id="wType" aria-label="Weapon type"><option value="">All types</option></select>
+      <select id="wElem" aria-label="Element"><option value="">All elements</option></select>
+      <label class="check"><input type="checkbox" id="wDup"> Duplicates only</label>
+      <input type="text" id="wSearch" placeholder="Search name or perk" aria-label="Search weapons" style="min-width: 220px;">
+    </div>
+    <p class="small muted">Copies of the same weapon are ranked by gear tier, crafted status, your DIM tag and power. Perks shown bright are the ones currently selected. Roll quality is your call: compare the perks before dismantling.</p>
+  </div>
+  <div class="tablewrap"><table id="weaponTable"></table></div>
+</section>
+
+<!-- BUILDER -->
+<section class="view" id="v-builder">
+  <div class="builder">
+    <div class="panel" id="builderForm">
+      <h2>Build a loadout</h2>
+      <div class="row">
+        <label class="field">Class<select id="bClass"></select></label>
+        <label class="field" style="flex: 1;">Exotic<select id="bExotic" style="width: 100%;"></select></label>
+      </div>
+      <label class="field">Preset<select id="bPreset"></select></label>
+      <div>
+        <div class="row small muted" style="justify-content: space-between;"><span>Stat</span><span>Priority · Minimum</span></div>
+        <div id="statRows"></div>
+      </div>
+      <div class="row">
+        <label class="field">Stat mods (+10 each)<select id="bMods"><option>0</option><option>1</option><option>2</option><option>3</option><option>4</option><option selected>5</option></select></label>
+        <label class="field">Set bonus<select id="bSet"><option value="">No set required</option></select></label>
+        <label class="field">Pieces<select id="bSetN"><option value="2">2</option><option value="4">4</option></select></label>
+      </div>
+      <label class="check small"><input type="checkbox" id="bMW" checked> Assume armor is masterworked (+5 to each unrolled stat on new armor)</label>
+      <label class="check small"><input type="checkbox" id="bVault" checked> Include vault and other characters' gear</label>
+      <button class="btn primary" id="btnRun">Find best builds</button>
+      <div id="runMsg" class="small muted"></div>
+    </div>
+    <div class="results" id="results"></div>
+  </div>
+</section>
+
+<!-- LOADOUTS -->
+<section class="view" id="v-loadouts">
+  <div class="row" style="justify-content: space-between;">
+    <h2>Saved loadouts</h2>
+    <div class="row">
+      <button class="btn" id="btnBackup">Download backup</button>
+      <button class="btn" id="btnRestore">Restore from backup</button>
+      <input type="file" id="restoreFile" accept=".json,application/json" hidden>
+    </div>
+  </div>
+  <p class="small muted">Loadouts live in this browser. Download a backup to move them to another device or keep them safe.</p>
+  <div id="loadoutList"></div>
+</section>
+</main>
+<div class="toast" id="toast" role="status"></div>
+<noscript><p style="padding:20px">Loadout Forge needs JavaScript.</p></noscript>
+</body>
+</html>

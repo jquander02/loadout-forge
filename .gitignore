@@ -1,0 +1,8 @@
+node_modules/
+_site/
+.DS_Store
+Thumbs.db
+*.log
+# Your own DIM exports stay off GitHub
+destiny*.csv
+*-backup-*.json
